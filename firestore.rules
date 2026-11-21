@@ -1,0 +1,503 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default-deny everything unless explicitly allowed
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- GLOBAL HARDENED PRIMITIVES ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidSlotId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-:]+$');
+    }
+
+    function isValidTimeHhMm(t) {
+      return t is string && t.matches('^(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$');
+    }
+
+    function isValidIsoDate(d) {
+      return d is string && d.matches('^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+    }
+
+    function isValidTurfPhotos(photos) {
+      return photos is list &&
+             photos.size() <= 6 &&
+             (photos.size() < 1 || (photos[0] is string && photos[0].size() <= 140000)) &&
+             (photos.size() < 2 || (photos[1] is string && photos[1].size() <= 140000)) &&
+             (photos.size() < 3 || (photos[2] is string && photos[2].size() <= 140000)) &&
+             (photos.size() < 4 || (photos[3] is string && photos[3].size() <= 140000)) &&
+             (photos.size() < 5 || (photos[4] is string && photos[4].size() <= 140000)) &&
+             (photos.size() < 6 || (photos[5] is string && photos[5].size() <= 140000));
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Bootstrapped admin verified via email + email_verified (zero DB reads, safe for list queries)
+    function isBootstrapAdmin() {
+      return isSignedIn() &&
+             request.auth.token.email == 'mustaphasaboogie@gmail.com' &&
+             request.auth.token.email_verified == true;
+    }
+
+    // Admin check for single-document operations (supports bootstrapped admin or role == 'admin' user doc)
+    function isAdmin() {
+      return isBootstrapAdmin() ||
+             (isSignedIn() &&
+              exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+    }
+
+    // Server-side verification of shared turf membership code stored in admin-only config
+    function isValidOwnerMembershipCode(submittedCode) {
+      return submittedCode is string &&
+             submittedCode.size() >= 4 &&
+             submittedCode.size() <= 64 &&
+             exists(/databases/$(database)/documents/app_config/owner_membership) &&
+             get(/databases/$(database)/documents/app_config/owner_membership).data.active == true &&
+             get(/databases/$(database)/documents/app_config/owner_membership).data.code == submittedCode;
+    }
+
+    // Verifies the user already has or is atomically receiving an owner role via WriteBatch
+    function userHasOrWillHaveOwnerRole(uid) {
+      return (exists(/databases/$(database)/documents/users/$(uid)) &&
+              get(/databases/$(database)/documents/users/$(uid)).data.role in ['owner_pending', 'owner', 'admin']) ||
+             (existsAfter(/databases/$(database)/documents/users/$(uid)) &&
+              getAfter(/databases/$(database)/documents/users/$(uid)).data.role in ['owner_pending', 'owner', 'admin']);
+    }
+
+    function isTurfVerified(turfId) {
+      return exists(/databases/$(database)/documents/turfs/$(turfId)) &&
+             get(/databases/$(database)/documents/turfs/$(turfId)).data.verificationStatus == 'verified';
+    }
+
+    function isVerifiedOwnerOfTurf(turfId) {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner' &&
+             exists(/databases/$(database)/documents/turfs/$(turfId)) &&
+             get(/databases/$(database)/documents/turfs/$(turfId)).data.ownerId == request.auth.uid &&
+             get(/databases/$(database)/documents/turfs/$(turfId)).data.verificationStatus == 'verified';
+    }
+
+    // --- VALIDATION BLUEPRINTS ---
+    function isValidOwnerMembershipConfig(data) {
+      return data.code is string && data.code.size() >= 4 && data.code.size() <= 64 &&
+             data.active is bool &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPlayerProfile(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             (!('role' in data) || data.role in ['player', 'owner_pending', 'owner', 'admin']) &&
+             (!('membershipCode' in data) || (data.membershipCode is string && data.membershipCode.size() <= 64)) &&
+             (!('primaryTurfId' in data) || (data.primaryTurfId is string && data.primaryTurfId.size() <= 128)) &&
+             (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 30)) &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 50 &&
+             data.handle is string && data.handle.size() >= 2 && data.handle.size() <= 40 &&
+             data.city is string && data.city.size() >= 2 && data.city.size() <= 50 &&
+             (!('position' in data) || (data.position is string && data.position.size() >= 2 && data.position.size() <= 30)) &&
+             (!('favoriteTeamId' in data) || (data.favoriteTeamId is string && data.favoriteTeamId.size() <= 64)) &&
+             (!('onboardingCompleted' in data) || data.onboardingCompleted is bool) &&
+             data.matchesPlayed is int && data.matchesPlayed >= 0 && data.matchesPlayed <= 10000 &&
+             data.wins is int && data.wins >= 0 && data.wins <= 10000 &&
+             data.trophies is int && data.trophies >= 0 && data.trophies <= 1000 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidTurfListing(data) {
+      return data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+             data.name is string && data.name.size() >= 2 && data.name.size() <= 80 &&
+             data.area is string && data.area.size() >= 2 && data.area.size() <= 60 &&
+             data.city is string && data.city.size() >= 2 && data.city.size() <= 80 &&
+             data.latitude is number && data.latitude >= -90 && data.latitude <= 90 &&
+             data.longitude is number && data.longitude >= -180 && data.longitude <= 180 &&
+             data.pricePerHour is int && data.pricePerHour >= 50 && data.pricePerHour <= 50000 &&
+             data.primaryFormat is string && data.primaryFormat.size() >= 2 && data.primaryFormat.size() <= 30 &&
+             data.amenities is list && data.amenities.size() <= 12 && (data.amenities.size() == 0 || data.amenities[0] is string) &&
+             data.timeSlots is list && data.timeSlots.size() <= 24 && (data.timeSlots.size() == 0 || data.timeSlots[0] is string) &&
+             (!('openTime' in data) || isValidTimeHhMm(data.openTime)) &&
+             (!('closeTime' in data) || isValidTimeHhMm(data.closeTime)) &&
+             (!('slotMinutes' in data) || data.slotMinutes in [60, 90]) &&
+             (!('photos' in data) || isValidTurfPhotos(data.photos)) &&
+             (!('description' in data) || (data.description is string && data.description.size() <= 500)) &&
+             (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 30)) &&
+             data.verificationStatus in ['pending', 'verified', 'rejected'] &&
+             data.isOpen is bool &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidTurfSlot(data) {
+      return isValidIsoDate(data.date) &&
+             isValidTimeHhMm(data.startTime) &&
+             isValidTimeHhMm(data.endTime) &&
+             data.status in ['available', 'booked', 'in_progress', 'completed', 'blocked'] &&
+             (!('bookingId' in data) || data.bookingId == null || (data.bookingId is string && data.bookingId.size() <= 128)) &&
+             (!('startedAt' in data) || data.startedAt == null || (data.startedAt is timestamp && data.startedAt <= request.time)) &&
+             (!('endsAt' in data) || data.endsAt == null || data.endsAt is timestamp) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidSlotTransition(prevStatus, nextStatus) {
+      return prevStatus == nextStatus ||
+             (prevStatus == 'available' && nextStatus in ['booked', 'blocked', 'in_progress']) ||
+             (prevStatus == 'booked' && nextStatus in ['in_progress', 'available']) ||
+             (prevStatus == 'in_progress' && nextStatus in ['completed', 'available']) ||
+             (prevStatus == 'blocked' && nextStatus == 'available');
+    }
+
+    function isValidTurfVenueBooking(data, turfId) {
+      return data.source in ['walk_in', 'player'] &&
+             data.customerName is string && data.customerName.size() >= 1 && data.customerName.size() <= 80 &&
+             data.phone is string && data.phone.size() >= 1 && data.phone.size() <= 30 &&
+             (!('date' in data) || isValidIsoDate(data.date)) &&
+             isValidTimeHhMm(data.startTime) &&
+             isValidTimeHhMm(data.endTime) &&
+             data.hours is number && data.hours > 0 && data.hours <= 16 &&
+             data.totalPrice is int && data.totalPrice >= 0 && data.totalPrice <= 500000 &&
+             data.paymentMethod in ['cash', 'wave'] &&
+             data.paid is bool &&
+             (!('slotId' in data) || (data.slotId is string && isValidSlotId(data.slotId))) &&
+             (!('slotIds' in data) || (data.slotIds is list && data.slotIds.size() >= 1 && data.slotIds.size() <= 16 && data.slotIds[0] is string)) &&
+             data.turfId == turfId &&
+             data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+             data.status in ['confirmed', 'in_progress', 'completed', 'no_show', 'cancelled'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidTurfBooking(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.turfId is string && data.turfId.size() >= 1 && data.turfId.size() <= 64 &&
+             data.turfName is string && data.turfName.size() >= 1 && data.turfName.size() <= 80 &&
+             data.turfLocation is string && data.turfLocation.size() >= 1 && data.turfLocation.size() <= 80 &&
+             data.pricePerHour is int && data.pricePerHour >= 0 && data.pricePerHour <= 50000 &&
+             data.dateLabel is string && data.dateLabel.size() >= 1 && data.dateLabel.size() <= 40 &&
+             data.timeSlot is string && data.timeSlot.size() >= 1 && data.timeSlot.size() <= 40 &&
+             data.pitchFormat is string && data.pitchFormat.size() >= 1 && data.pitchFormat.size() <= 30 &&
+             data.status in ['confirmed', 'cancelled'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidTournamentRegistration(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.tournamentId is string && data.tournamentId.size() >= 1 && data.tournamentId.size() <= 64 &&
+             data.tournamentTitle is string && data.tournamentTitle.size() >= 1 && data.tournamentTitle.size() <= 100 &&
+             data.teamName is string && data.teamName.size() >= 1 && data.teamName.size() <= 80 &&
+             data.location is string && data.location.size() >= 1 && data.location.size() <= 80 &&
+             data.dateRange is string && data.dateRange.size() >= 1 && data.dateRange.size() <= 60 &&
+             data.prizePool is string && data.prizePool.size() >= 1 && data.prizePool.size() <= 40 &&
+             data.status in ['registered', 'withdrawn'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidMatchChallenge(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.hostTeamName is string && data.hostTeamName.size() >= 1 && data.hostTeamName.size() <= 80 &&
+             data.opponentName is string && data.opponentName.size() >= 1 && data.opponentName.size() <= 80 &&
+             data.turfName is string && data.turfName.size() >= 1 && data.turfName.size() <= 80 &&
+             data.stakeLabel is string && data.stakeLabel.size() >= 1 && data.stakeLabel.size() <= 40 &&
+             data.format is string && data.format.size() >= 1 && data.format.size() <= 30 &&
+             data.scheduleLabel is string && data.scheduleLabel.size() >= 1 && data.scheduleLabel.size() <= 60 &&
+             data.playersCount is int && data.playersCount >= 1 && data.playersCount <= 44 &&
+             data.maxPlayers is int && data.maxPlayers >= 2 && data.maxPlayers <= 44 &&
+             data.isCreatedByUser is bool &&
+             data.status in ['open', 'accepted', 'completed'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
+    }
+
+    function isValidPlayerFavorite(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 64 &&
+             data.targetType in ['turf', 'team'] &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // --- ADMIN-ONLY CONFIG COLLECTION ---
+    match /app_config/{configId} {
+      allow list: if isBootstrapAdmin();
+      allow get: if isValidId(configId) && isAdmin();
+      allow create, update: if isValidId(configId) &&
+                               isAdmin() &&
+                               configId == 'owner_membership' &&
+                               incoming().keys().hasAll(['code', 'active', 'updatedAt']) &&
+                               incoming().keys().hasOnly(['code', 'active', 'updatedAt']) &&
+                               isValidOwnerMembershipConfig(incoming());
+      allow delete: if isValidId(configId) && isAdmin();
+    }
+
+    // --- MEMBERSHIP CODE CHECK COLLECTION ---
+    match /code_checks/{checkId} {
+      // Never allow anyone to list, read, update, or delete check documents
+      allow read, update, delete: if false;
+
+      // Only allow creating a check doc if the submitted code matches the active admin code
+      allow create: if isValidId(checkId) &&
+                       incoming().keys().hasAll(['code', 'createdAt']) &&
+                       incoming().keys().hasOnly(['code', 'createdAt']) &&
+                       incoming().code is string &&
+                       incoming().createdAt is timestamp &&
+                       incoming().createdAt <= request.time &&
+                       isValidOwnerMembershipCode(incoming().code);
+    }
+
+    // --- SHARED TURFS COLLECTION ---
+    match /turfs/{turfId} {
+      // List avoids get()/exists() calls: players query verificationStatus=='verified', owners query ownerId==uid, admin lists all
+      allow list: if isSignedIn() &&
+                     (resource.data.verificationStatus == 'verified' ||
+                      resource.data.ownerId == request.auth.uid ||
+                      isBootstrapAdmin());
+
+      allow get: if isValidId(turfId) &&
+                    isSignedIn() &&
+                    (existing().verificationStatus == 'verified' ||
+                     existing().ownerId == request.auth.uid ||
+                     isAdmin());
+
+      // Owners can create only pending turfs belonging to themselves (verified atomically with owner role)
+      allow create: if isValidId(turfId) &&
+                       isSignedIn() &&
+                       incoming().keys().hasAll(['ownerId', 'name', 'area', 'city', 'latitude', 'longitude', 'pricePerHour', 'primaryFormat', 'amenities', 'timeSlots', 'verificationStatus', 'isOpen', 'createdAt']) &&
+                       incoming().keys().hasOnly(['ownerId', 'name', 'area', 'city', 'latitude', 'longitude', 'pricePerHour', 'primaryFormat', 'amenities', 'timeSlots', 'openTime', 'closeTime', 'slotMinutes', 'photos', 'description', 'contactPhone', 'verificationStatus', 'isOpen', 'createdAt', 'updatedAt']) &&
+                       isValidTurfListing(incoming()) &&
+                       (
+                         isAdmin() ||
+                         (incoming().ownerId == request.auth.uid &&
+                          incoming().verificationStatus == 'pending' &&
+                          userHasOrWillHaveOwnerRole(request.auth.uid))
+                       );
+
+      // Owners can update details only (never verificationStatus or ownerId); Admins can verify/reject
+      allow update: if isValidId(turfId) &&
+                       isSignedIn() &&
+                       isValidTurfListing(incoming()) &&
+                       incoming().ownerId == existing().ownerId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         (isAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['verificationStatus', 'isOpen', 'name', 'area', 'city', 'latitude', 'longitude', 'pricePerHour', 'primaryFormat', 'amenities', 'timeSlots', 'openTime', 'closeTime', 'slotMinutes', 'photos', 'description', 'contactPhone', 'updatedAt'])) ||
+                         (existing().ownerId == request.auth.uid &&
+                          incoming().verificationStatus == existing().verificationStatus &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'area', 'city', 'latitude', 'longitude', 'pricePerHour', 'primaryFormat', 'amenities', 'timeSlots', 'openTime', 'closeTime', 'slotMinutes', 'photos', 'description', 'contactPhone', 'isOpen', 'updatedAt']))
+                       );
+
+      allow delete: if isValidId(turfId) &&
+                       isSignedIn() &&
+                       (existing().ownerId == request.auth.uid || isAdmin());
+
+      match /slots/{slotId} {
+        allow list: if isSignedIn() &&
+                       (isTurfVerified(turfId) || isVerifiedOwnerOfTurf(turfId) || isAdmin());
+        allow get: if isValidSlotId(slotId) &&
+                      isSignedIn() &&
+                      (isTurfVerified(turfId) || isVerifiedOwnerOfTurf(turfId) || isAdmin());
+
+        allow create: if isValidSlotId(slotId) &&
+                         incoming().keys().hasAll(['date', 'startTime', 'endTime', 'status', 'createdAt']) &&
+                         incoming().keys().hasOnly(['date', 'startTime', 'endTime', 'status', 'bookingId', 'startedAt', 'endsAt', 'createdAt', 'updatedAt']) &&
+                         slotId == incoming().date + '_' + incoming().startTime &&
+                         isValidTurfSlot(incoming()) &&
+                         (
+                           isAdmin() ||
+                           (isVerifiedOwnerOfTurf(turfId) &&
+                            incoming().status == 'available' &&
+                            (!('bookingId' in incoming()) || incoming().bookingId == null))
+                         );
+
+        allow update: if isValidSlotId(slotId) &&
+                         isValidTurfSlot(incoming()) &&
+                         incoming().date == existing().date &&
+                         incoming().startTime == existing().startTime &&
+                         incoming().endTime == existing().endTime &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'bookingId', 'startedAt', 'endsAt', 'updatedAt']) &&
+                         (
+                           isAdmin() ||
+                           (isVerifiedOwnerOfTurf(turfId) &&
+                            isValidSlotTransition(existing().status, incoming().status))
+                         );
+
+        allow delete: if isValidSlotId(slotId) && isAdmin();
+      }
+
+      match /bookings/{bookingId} {
+        allow list: if isVerifiedOwnerOfTurf(turfId) || isAdmin();
+        allow get: if isValidId(bookingId) &&
+                      (isVerifiedOwnerOfTurf(turfId) || isAdmin());
+
+        allow create: if isValidId(bookingId) &&
+                         incoming().keys().hasAll(['source', 'customerName', 'phone', 'startTime', 'endTime', 'hours', 'totalPrice', 'paymentMethod', 'paid', 'turfId', 'ownerId', 'status', 'createdAt']) &&
+                         incoming().keys().hasOnly(['source', 'customerName', 'phone', 'date', 'startTime', 'endTime', 'hours', 'totalPrice', 'paymentMethod', 'paid', 'slotId', 'slotIds', 'turfId', 'ownerId', 'status', 'createdAt', 'updatedAt']) &&
+                         isValidTurfVenueBooking(incoming(), turfId) &&
+                         (
+                           isAdmin() ||
+                           (isVerifiedOwnerOfTurf(turfId) &&
+                            incoming().ownerId == request.auth.uid &&
+                            incoming().source == 'walk_in')
+                         );
+
+        allow update: if isValidId(bookingId) &&
+                         isValidTurfVenueBooking(incoming(), turfId) &&
+                         incoming().turfId == existing().turfId &&
+                         incoming().ownerId == existing().ownerId &&
+                         incoming().source == existing().source &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'customerName', 'phone', 'totalPrice', 'paymentMethod', 'paid', 'updatedAt']) &&
+                         (isVerifiedOwnerOfTurf(turfId) || isAdmin());
+
+        allow delete: if isValidId(bookingId) && isAdmin();
+      }
+    }
+
+    // --- USERS COLLECTION & SUBCOLLECTIONS ---
+    match /users/{userId} {
+      allow list: if isOwner(userId) || isBootstrapAdmin();
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+
+      // Players create role=='player'. Owners can create role=='owner_pending' ONLY with a valid server-checked membershipCode.
+      allow create: if isValidId(userId) &&
+                       isOwner(userId) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'handle', 'city', 'matchesPlayed', 'wins', 'trophies', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'role', 'membershipCode', 'primaryTurfId', 'contactPhone', 'displayName', 'handle', 'city', 'position', 'favoriteTeamId', 'onboardingCompleted', 'matchesPlayed', 'wins', 'trophies', 'createdAt', 'updatedAt']) &&
+                       isValidPlayerProfile(incoming()) &&
+                       (
+                         !('role' in incoming()) ||
+                         incoming().role == 'player' ||
+                         (incoming().role == 'owner_pending' &&
+                          'membershipCode' in incoming() &&
+                          isValidOwnerMembershipCode(incoming().membershipCode)) ||
+                         isBootstrapAdmin()
+                       );
+
+      // Users CANNOT modify role or membershipCode on update. Admins can promote owner_pending -> owner.
+      allow update: if isValidId(userId) &&
+                       isSignedIn() &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         (isAdmin() &&
+                          (!('role' in incoming()) || incoming().role in ['player', 'owner_pending', 'owner', 'admin']) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['role', 'primaryTurfId', 'onboardingCompleted', 'updatedAt'])) ||
+                         (isOwner(userId) &&
+                          isValidPlayerProfile(incoming()) &&
+                          ((!('role' in existing()) && (!('role' in incoming()) || incoming().role == 'player')) ||
+                           ('role' in existing() && incoming().role == existing().role)) &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'handle', 'city', 'position', 'favoriteTeamId', 'onboardingCompleted', 'primaryTurfId', 'contactPhone', 'matchesPlayed', 'wins', 'trophies', 'updatedAt']))
+                       );
+
+      allow delete: if isValidId(userId) && (isOwner(userId) || isAdmin());
+
+      match /bookings/{bookingId} {
+        allow list: if isOwner(userId);
+        allow get: if isValidId(bookingId) && isOwner(userId);
+
+        allow create: if isValidId(bookingId) &&
+                         isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'turfId', 'turfName', 'turfLocation', 'pricePerHour', 'dateLabel', 'timeSlot', 'pitchFormat', 'status', 'createdAt']) &&
+                         incoming().keys().hasOnly(['userId', 'turfId', 'turfName', 'turfLocation', 'pricePerHour', 'dateLabel', 'timeSlot', 'pitchFormat', 'status', 'createdAt', 'updatedAt']) &&
+                         incoming().status == 'confirmed' &&
+                         isValidTurfBooking(incoming());
+
+        allow update: if isValidId(bookingId) &&
+                         isOwner(userId) &&
+                         isValidTurfBooking(incoming()) &&
+                         existing().status != 'cancelled' &&
+                         incoming().userId == existing().userId &&
+                         incoming().turfId == existing().turfId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'dateLabel', 'timeSlot', 'updatedAt']);
+
+        allow delete: if isValidId(bookingId) && isOwner(userId);
+      }
+
+      match /registrations/{registrationId} {
+        allow list: if isOwner(userId);
+        allow get: if isValidId(registrationId) && isOwner(userId);
+
+        allow create: if isValidId(registrationId) &&
+                         isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'tournamentId', 'tournamentTitle', 'teamName', 'location', 'dateRange', 'prizePool', 'status', 'createdAt']) &&
+                         incoming().keys().hasOnly(['userId', 'tournamentId', 'tournamentTitle', 'teamName', 'location', 'dateRange', 'prizePool', 'status', 'createdAt', 'updatedAt']) &&
+                         incoming().status == 'registered' &&
+                         isValidTournamentRegistration(incoming());
+
+        allow update: if isValidId(registrationId) &&
+                         isOwner(userId) &&
+                         isValidTournamentRegistration(incoming()) &&
+                         existing().status != 'withdrawn' &&
+                         incoming().userId == existing().userId &&
+                         incoming().tournamentId == existing().tournamentId &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'teamName', 'updatedAt']);
+
+        allow delete: if isValidId(registrationId) && isOwner(userId);
+      }
+
+      match /challenges/{challengeId} {
+        allow list: if isOwner(userId);
+        allow get: if isValidId(challengeId) && isOwner(userId);
+
+        allow create: if isValidId(challengeId) &&
+                         isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'hostTeamName', 'opponentName', 'turfName', 'stakeLabel', 'format', 'scheduleLabel', 'playersCount', 'maxPlayers', 'isCreatedByUser', 'status', 'createdAt']) &&
+                         incoming().keys().hasOnly(['userId', 'hostTeamName', 'opponentName', 'turfName', 'stakeLabel', 'format', 'scheduleLabel', 'playersCount', 'maxPlayers', 'isCreatedByUser', 'status', 'createdAt', 'updatedAt']) &&
+                         incoming().status in ['open', 'accepted'] &&
+                         isValidMatchChallenge(incoming());
+
+        allow update: if isValidId(challengeId) &&
+                         isOwner(userId) &&
+                         isValidMatchChallenge(incoming()) &&
+                         existing().status != 'completed' &&
+                         incoming().userId == existing().userId &&
+                         incoming().createdAt == existing().createdAt &&
+                         (
+                           (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'playersCount', 'opponentName', 'updatedAt'])) ||
+                           (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+                         );
+
+        allow delete: if isValidId(challengeId) && isOwner(userId);
+      }
+
+      match /favorites/{favoriteId} {
+        allow list: if isOwner(userId);
+        allow get: if isValidId(favoriteId) && isOwner(userId);
+
+        allow create: if isValidId(favoriteId) &&
+                         isOwner(userId) &&
+                         incoming().keys().hasAll(['userId', 'targetId', 'targetType', 'createdAt']) &&
+                         incoming().keys().hasOnly(['userId', 'targetId', 'targetType', 'createdAt']) &&
+                         isValidPlayerFavorite(incoming());
+
+        allow update: if false;
+
+        allow delete: if isValidId(favoriteId) && isOwner(userId);
+      }
+    }
+  }
+}

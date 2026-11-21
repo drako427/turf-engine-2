@@ -1,0 +1,6 @@
+{
+  "name": "Football Hub",
+  "description": "Find and book football turfs, join match challenges, explore tournaments, and connect with teams in The Gambia.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

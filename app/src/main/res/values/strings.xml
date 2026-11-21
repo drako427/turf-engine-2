@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Football Hub</string>
+    <string name="welcome_hero_desc">Football player portrait</string>
+    <string name="welcome_subtitle">The Complete Football Ecosystem in The Gambia</string>
+    <string name="get_started">Get Started</string>
+    <string name="sign_in_with_google">Sign in with Google</string>
+    <string name="access_options_desc">Access options</string>
+    <string name="membership_code_prompt">Turf membership code required. Visit or contact admin.</string>
+    <string name="membership_code_hint">Enter membership code</string>
+    <string name="membership_code_continue">Continue</string>
+    <string name="verifying_access">Verifying access...</string>
+    <string name="owner_welcome_title">Turf Owner</string>
+    <string name="owner_welcome_subtitle">Manage your turf, slots and bookings</string>
+    <string name="back_to_player_app">Back to player app</string>
+    <string name="invalid_membership_code_error">Invalid membership code. Visit or contact admin.</string>
+</resources>

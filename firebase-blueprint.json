@@ -1,0 +1,231 @@
+{
+  "entities": {
+    "OwnerMembershipConfig": {
+      "title": "OwnerMembershipConfig",
+      "description": "Admin-only configuration storing the shared turf owner membership code.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "Shared secret membership code distributed in person by admin." },
+        "active": { "type": "boolean", "description": "Whether owner onboarding via this code is enabled." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": ["code", "active", "updatedAt"]
+    },
+    "MembershipCodeCheck": {
+      "title": "MembershipCodeCheck",
+      "description": "Write-once membership code check verified by Firestore Security Rules before entering owner mode.",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "Submitted membership code checked against /app_config/owner_membership." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["code", "createdAt"]
+    },
+    "PlayerProfile": {
+      "title": "PlayerProfile",
+      "description": "Authenticated user profile with server-enforced role, location, team affiliation, and career stats.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the user." },
+        "role": { "type": "string", "enum": ["player", "owner_pending", "owner", "admin"], "description": "Access role protected by Firestore Security Rules." },
+        "membershipCode": { "type": "string", "description": "Membership code submitted during owner onboarding for rule validation." },
+        "primaryTurfId": { "type": "string", "description": "ID of the turf created by an owner account." },
+        "contactPhone": { "type": "string", "description": "Business phone number for turf owners." },
+        "displayName": { "type": "string", "description": "User display name." },
+        "handle": { "type": "string", "description": "User handle (e.g., @drako427)." },
+        "city": { "type": "string", "description": "Preferred Gambian city/area (e.g., Banjul, Serrekunda, Brikama)." },
+        "position": { "type": "string", "description": "Preferred football position for players." },
+        "favoriteTeamId": { "type": "string", "description": "Primary team ID or free_agent." },
+        "onboardingCompleted": { "type": "boolean", "description": "Whether onboarding has been completed." },
+        "matchesPlayed": { "type": "integer", "description": "Total matches played." },
+        "wins": { "type": "integer", "description": "Total wins." },
+        "trophies": { "type": "integer", "description": "Total trophies won." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp on creation (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp on update (FieldValue.serverTimestamp())." }
+      },
+      "required": ["userId", "displayName", "handle", "city", "matchesPlayed", "wins", "trophies", "createdAt"]
+    },
+    "TurfListing": {
+      "title": "TurfListing",
+      "description": "Football turf venue submitted by an owner; players can read only admin-verified turfs.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "description": "Firebase Auth UID of the turf owner." },
+        "name": { "type": "string", "description": "Turf venue name." },
+        "area": { "type": "string", "description": "Gambian town or neighborhood." },
+        "city": { "type": "string", "description": "Full city label (e.g., Serrekunda, The Gambia)." },
+        "latitude": { "type": "number", "description": "Latitude coordinate in The Gambia." },
+        "longitude": { "type": "number", "description": "Longitude coordinate in The Gambia." },
+        "pricePerHour": { "type": "integer", "description": "Hourly booking price in Gambian Dalasi (D)." },
+        "primaryFormat": { "type": "string", "description": "Primary pitch format (e.g., 5-a-side, 7-a-side, 11-a-side)." },
+        "amenities": { "type": "array", "description": "Bounded list of turf amenities." },
+        "timeSlots": { "type": "array", "description": "Bounded list of daily time slots." },
+        "openTime": { "type": "string", "description": "Opening time in 24h HH:mm GMT format (default 08:00)." },
+        "closeTime": { "type": "string", "description": "Closing time in 24h HH:mm GMT format (default 23:00, supports 24:00)." },
+        "slotMinutes": { "type": "integer", "description": "Slot duration in minutes (60 or 90)." },
+        "photos": { "type": "array", "description": "Up to 6 compressed turf photo strings (first is cover photo)." },
+        "description": { "type": "string", "description": "Venue summary description." },
+        "contactPhone": { "type": "string", "description": "Owner contact phone number." },
+        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "rejected"], "description": "Admin verification state." },
+        "isOpen": { "type": "boolean", "description": "Whether turf is currently open for bookings." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["ownerId", "name", "area", "city", "latitude", "longitude", "pricePerHour", "primaryFormat", "amenities", "timeSlots", "verificationStatus", "isOpen", "createdAt"]
+    },
+    "TurfSlot": {
+      "title": "TurfSlot",
+      "description": "Time slot under turfs/{turfId}/slots/{date_startTime} in The Gambia (GMT) time zone.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "description": "ISO date YYYY-MM-DD in GMT." },
+        "startTime": { "type": "string", "description": "Start time in 24h HH:mm GMT." },
+        "endTime": { "type": "string", "description": "End time in 24h HH:mm GMT (supports 24:00)." },
+        "status": { "type": "string", "enum": ["available", "booked", "in_progress", "completed", "blocked"], "description": "Slot lifecycle state." },
+        "bookingId": { "type": "string", "description": "Linked venue booking document ID, if any." },
+        "startedAt": { "type": "string", "format": "date-time", "description": "Actual kickoff server timestamp when started." },
+        "endsAt": { "type": "string", "format": "date-time", "description": "Scheduled end timestamp in GMT." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["date", "startTime", "endTime", "status", "createdAt"]
+    },
+    "TurfVenueBooking": {
+      "title": "TurfVenueBooking",
+      "description": "Venue booking record under turfs/{turfId}/bookings/{bookingId} for walk-in and future player bookings.",
+      "type": "object",
+      "properties": {
+        "source": { "type": "string", "enum": ["walk_in", "player"], "description": "Booking origin." },
+        "customerName": { "type": "string", "description": "Customer or team name." },
+        "phone": { "type": "string", "description": "Customer contact phone number." },
+        "date": { "type": "string", "description": "ISO date YYYY-MM-DD in GMT." },
+        "startTime": { "type": "string", "description": "Session start time in HH:mm GMT." },
+        "endTime": { "type": "string", "description": "Session finish time in HH:mm GMT." },
+        "hours": { "type": "number", "description": "Duration in hours." },
+        "totalPrice": { "type": "integer", "description": "Agreed total price in Gambian Dalasi (D)." },
+        "paymentMethod": { "type": "string", "enum": ["cash", "wave"], "description": "Recorded payment method." },
+        "paid": { "type": "boolean", "description": "Whether payment is recorded." },
+        "slotId": { "type": "string", "description": "Primary covered slot ID." },
+        "slotIds": { "type": "array", "description": "All slot IDs covered by this session." },
+        "turfId": { "type": "string", "description": "Parent turf ID." },
+        "ownerId": { "type": "string", "description": "Turf owner UID." },
+        "status": { "type": "string", "enum": ["confirmed", "in_progress", "completed", "no_show", "cancelled"], "description": "Venue booking status." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["source", "customerName", "phone", "startTime", "endTime", "hours", "totalPrice", "paymentMethod", "paid", "turfId", "ownerId", "status", "createdAt"]
+    },
+    "TurfBooking": {
+      "title": "TurfBooking",
+      "description": "A player's football turf slot reservation.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "turfId": { "type": "string", "description": "Booked turf identifier." },
+        "turfName": { "type": "string", "description": "Turf venue name." },
+        "turfLocation": { "type": "string", "description": "Turf city/area." },
+        "pricePerHour": { "type": "integer", "description": "Hourly price in Gambian Dalasi (D)." },
+        "dateLabel": { "type": "string", "description": "Selected date label (e.g., Sat Nov 22)." },
+        "timeSlot": { "type": "string", "description": "Selected time slot (e.g., 11:00-12:00)." },
+        "pitchFormat": { "type": "string", "description": "Pitch format (e.g., 7-a-side)." },
+        "status": { "type": "string", "enum": ["confirmed", "cancelled"], "description": "Booking status." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["userId", "turfId", "turfName", "turfLocation", "pricePerHour", "dateLabel", "timeSlot", "pitchFormat", "status", "createdAt"]
+    },
+    "TournamentRegistration": {
+      "title": "TournamentRegistration",
+      "description": "Player/team registration for a local football tournament.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "tournamentId": { "type": "string", "description": "Tournament identifier." },
+        "tournamentTitle": { "type": "string", "description": "Tournament title." },
+        "teamName": { "type": "string", "description": "Registered team name." },
+        "location": { "type": "string", "description": "Host city/venue." },
+        "dateRange": { "type": "string", "description": "Tournament schedule dates." },
+        "prizePool": { "type": "string", "description": "Tournament prize pool." },
+        "status": { "type": "string", "enum": ["registered", "withdrawn"], "description": "Registration status." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["userId", "tournamentId", "tournamentTitle", "teamName", "location", "dateRange", "prizePool", "status", "createdAt"]
+    },
+    "MatchChallenge": {
+      "title": "MatchChallenge",
+      "description": "A 7-a-side or 5-a-side match challenge created or joined by the player.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "hostTeamName": { "type": "string", "description": "Host team name." },
+        "opponentName": { "type": "string", "description": "Opponent team name or Anyone." },
+        "turfName": { "type": "string", "description": "Match venue turf name." },
+        "stakeLabel": { "type": "string", "description": "Match stake/fee label (e.g., D500)." },
+        "format": { "type": "string", "description": "Match format (e.g., 7-a-side)." },
+        "scheduleLabel": { "type": "string", "description": "Schedule label (e.g., Today • 6:00 PM)." },
+        "playersCount": { "type": "integer", "description": "Current players joined." },
+        "maxPlayers": { "type": "integer", "description": "Max players for the match." },
+        "isCreatedByUser": { "type": "boolean", "description": "True if created by current user." },
+        "status": { "type": "string", "enum": ["open", "accepted", "completed"], "description": "Challenge lifecycle status." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["userId", "hostTeamName", "opponentName", "turfName", "stakeLabel", "format", "scheduleLabel", "playersCount", "maxPlayers", "isCreatedByUser", "status", "createdAt"]
+    },
+    "PlayerFavorite": {
+      "title": "PlayerFavorite",
+      "description": "Bookmarked turf or followed football team.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Owner Firebase Auth UID." },
+        "targetId": { "type": "string", "description": "ID of turf or team." },
+        "targetType": { "type": "string", "enum": ["turf", "team"], "description": "Type of saved item." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp (FieldValue.serverTimestamp())." }
+      },
+      "required": ["userId", "targetId", "targetType", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/app_config/{configId}": {
+      "schema": { "$ref": "#/entities/OwnerMembershipConfig" },
+      "description": "Admin-only app configuration including the shared owner membership code."
+    },
+    "/code_checks/{checkId}": {
+      "schema": { "$ref": "#/entities/MembershipCodeCheck" },
+      "description": "Write-once server verification check document for membership code entry."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/PlayerProfile" },
+      "description": "Authenticated user profile and access role."
+    },
+    "/turfs/{turfId}": {
+      "schema": { "$ref": "#/entities/TurfListing" },
+      "description": "Shared turf directory; pending turfs visible only to owner and admin, verified turfs visible to players."
+    },
+    "/turfs/{turfId}/slots/{slotId}": {
+      "schema": { "$ref": "#/entities/TurfSlot" },
+      "description": "Daily pitch slots under a verified turf; readable by signed-in players, writable only by verified turf owner or admin."
+    },
+    "/turfs/{turfId}/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/TurfVenueBooking" },
+      "description": "Walk-in and venue bookings readable/writable only by the verified turf owner or admin."
+    },
+    "/users/{userId}/bookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/TurfBooking" },
+      "description": "Turf reservations owned by the player."
+    },
+    "/users/{userId}/registrations/{registrationId}": {
+      "schema": { "$ref": "#/entities/TournamentRegistration" },
+      "description": "Tournament entries owned by the player."
+    },
+    "/users/{userId}/challenges/{challengeId}": {
+      "schema": { "$ref": "#/entities/MatchChallenge" },
+      "description": "Challenges created or joined by the player."
+    },
+    "/users/{userId}/favorites/{favoriteId}": {
+      "schema": { "$ref": "#/entities/PlayerFavorite" },
+      "description": "Bookmarked turfs and followed teams for the player."
+    }
+  }
+}
